@@ -1,0 +1,56 @@
+import pandas as pd
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+df_true = pd.read_csv('/kaggle/input/fake-news-dataset/True.csv')
+df_fake = pd.read_csv('/kaggle/input/fake-news-dataset/Fake.csv')
+
+
+df_true['label'] = 0
+df_fake['label'] = 1
+
+df = pd.concat([df_true, df_fake], ignore_index=True )
+
+df = df.sample(frac=1).reset_index(drop=True)
+
+
+Text_column = 'text'
+label_column = 'label'
+
+print(f"Missing values'{Text_column}': {df[Text_column].isnull().sum()}")
+
+df.dropna(subset=[Text_column], inplace=True)
+
+import nltk
+from nltk.corpus import stopwords
+nltk.download('stopwords')
+stopwords = set(stopwords.words('English'))
+import re
+def clean_text(text):
+    text = text.lower()
+    re.sub(r'http\S+', '', text)
+    re.sub(r'[^a-zA-Zäöüß\s]','',text)
+    return text
+df[Text_column]= df[Text_column].apply(clean_text)
+
+
+vectorizer = TfidfVectorizer(max_features=500, min_df=5, max_df=0.85)
+
+from sklearn.model_selection import train_test_split
+X = df[Text_column]
+y = df[label_column]
+X_train, X_test , y_train, y_test = train_test_split(X, y, train_size=0.3, random_state=124)
+X_train_df = vectorizer.fit_transform(X_train)
+X_test_df = vectorizer.transform(X_test)
+print(f"Shape Trainingdata: {X_train_df.shape}")
+print(f"Shape Testdata: {X_test_df.shape}")
+
+from sklearn.naive_bayes import MultinomialNB
+MB = MultinomialNB()
+MB.fit(X_train_df, y_train)
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+y_pred = MB.predict(X_test_df)
+acc_score = accuracy_score(y_test, y_pred)
+CMatrix = confusion_matrix(y_test,y_pred)
+Creport = classification_report(y_test, y_pred)
+print(f"Accuracy score : {acc_score} , Confusion matrix : {CMatrix} , Classification Report : {Creport}")
