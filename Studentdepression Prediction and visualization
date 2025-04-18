@@ -7,7 +7,6 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score, accuracy_score
 
-
 df = pd.read_csv('student-depression-dataset.csv') 
 
 def data_processing(df):
