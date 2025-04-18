@@ -1,0 +1,76 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import f1_score, accuracy_score
+
+
+df = pd.read_csv('student-depression-dataset.csv') 
+
+def data_processing(df):
+
+  print(df.head())
+  print(df.isnull().sum())
+  df = df.drop('id', axis=1)
+  return df
+
+df = data_processing(df) 
+df["Depression"] = df['Depression'].map({1:'Yes', 0:'No'})
+
+binary_columns = [col for col in df.select_dtypes(include=['float', 'int']).columns 
+                  if set(df[col].dropna().unique()) <= {0, 1}]
+
+df1 = df.drop(columns=binary_columns)
+
+df_number = df.select_dtypes(include=['float', 'int']).columns
+df_object = df.select_dtypes(include=['object']).columns
+
+def Catplots(df):
+    for col in df_object:
+      if col != 'Depression':
+          if col not in ['City','Profession','Degree']:
+            sns.catplot(x=col, hue='Depression', col='Depression', data=df, kind='count', palette='Set3')
+            plt.xticks(rotation=45)
+            plt.show()
+              
+sns.heatmap(df[df_number].corr(), annot=True, cmap='coolwarm')
+plt.show()
+sns.countplot(x='City', hue='Depression', data=df, palette='Set2')
+plt.xticks(rotation=70)
+plt.title("Depression by City")  
+plt.show()
+    
+Catplots(df)
+
+def plotting_boxplots(df1, df_number):  
+    for i in df_number:
+       sns.boxplot(x='Depression', y=i, data=df1, color='red')
+       plt.show()
+    
+plotting_boxplots(df1, df_number) 
+
+scaler = StandardScaler()
+X = df[df_number]
+df["Depression"] = df['Depression'].map({'Yes':1, 'No':0})
+Y = df['Depression']
+X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.3, random_state=149)
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+param_grid = {
+    'n_neighbors': list(range(1, 25, 2)),         
+    'weights': ['uniform', 'distance'],       
+    'metric': ['euclidean', 'manhattan', 'minkowski']  
+}
+
+grid = GridSearchCV(estimator=KNeighborsClassifier(), param_grid=param_grid, cv=5, scoring='f1', n_jobs=-1)
+
+grid.fit(X_train_scaled, y_train)
+Prediction = grid.predict(X_test_scaled)
+print(grid.best_params_)
+f1 = f1_score(y_test, Prediction)
+accuracy = accuracy_score(y_test, Prediction)
+print(f"These are the best scores f1: {f1} accuracy: {accuracy}")
