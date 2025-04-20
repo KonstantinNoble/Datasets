@@ -1,0 +1,130 @@
+import numpy as np
+import pandas as pd
+from datetime import date
+import plotly.express as px
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_error, accuracy_score
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+
+
+df = pd.read_csv('/kaggle/input/customer-relationship-management-dataset/CRM_Donor_Simulation_Dataset (2).csv')
+
+
+print("First 5 rows:\n", df.head())
+print("\nUnique values:\n", df.nunique())
+print("\nMissing values:\n", df.isnull().sum())
+
+
+today = pd.to_datetime(date.today())
+df['LastDonationDate'] = pd.to_datetime(df['LastDonationDate'])
+df['DaysSinceLastDonation'] = (today - df['LastDonationDate']).dt.days
+
+
+df['EventParticipation'] = df['EventParticipation'].map({'Yes': 1, 'No': 0})
+
+
+state_summary = df.groupby('State').agg({'TotalAmountDonated': 'sum'}).reset_index()
+fig = px.choropleth(
+    state_summary,
+    locations='State',
+    locationmode="USA-states",
+    color='TotalAmountDonated',
+    color_continuous_scale="Blues",
+    scope="usa",
+    labels={'TotalAmountDonated': 'Donated (USD)'},
+    title="Total Donations by US State"
+)
+fig.show()
+df.drop(['DonorID', 'FirstName', 'LastName', 'Email', 'Phone', 'City', 'State', 'ZipCode'], axis=1, inplace=True)
+
+
+plt.figure(figsize=(8, 6))
+sns.heatmap(df.corr(numeric_only=True), annot=True, cmap='Blues')
+plt.title("Correlation Matrix")
+plt.show()
+
+
+df['DonationCategory'] = pd.cut(
+    df['TotalAmountDonated'],
+    bins=3,
+    labels=['Low', 'Medium', 'High']
+)
+
+donation_summary = df.groupby('DonationCategory')['TotalAmountDonated'].sum().reset_index()
+plt.gca().yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f'{x:,.0f}'))
+sns.barplot(data=donation_summary, x='DonationCategory', y='TotalAmountDonated', palette='Blues')
+plt.title("Total Donations by Donation Category")
+plt.ylabel("Total Donations (USD)")
+plt.xlabel("Donation Category")
+plt.show()
+
+
+df['EngagementScore_original'] = df['EngagementScore']
+df['EngagementScore'] = pd.cut(df['EngagementScore'], bins=3, labels=['Low', 'Medium', 'High'])
+
+
+numeric_columns = df.select_dtypes(include=['float', 'int']).columns
+for col in numeric_columns:
+    if col != 'EventParticipation':
+        sns.boxplot(data=df, x='EngagementScore', y=col, color='red')
+        plt.title(f"{col} by Engagement Score")
+        plt.show()
+
+df['EngagementScore'] = df['EngagementScore_original']
+numeric_columns = df.select_dtypes(include=['float', 'int']).columns
+
+X = df[numeric_columns].drop(['EngagementScore'], axis=1)
+y = df['EngagementScore']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=125)
+X_train = X_train.select_dtypes(include=['float', 'int'])
+X_test = X_test.select_dtypes(include=['float', 'int'])
+
+linear_model = LinearRegression()
+linear_model.fit(X_train, y_train)
+linear_predictions = linear_model.predict(X_test)
+
+
+mae_linear = mean_absolute_error(y_test, linear_predictions)
+mse_linear = mean_squared_error(y_test, linear_predictions)
+print(f"Linear Regression - Mean Squared Error: {mse_linear:.3f}, Mean Absolute Error: {mae_linear:.3f}")
+
+
+X_single = df[['TotalAmountDonated']]
+X_train_single, X_test_single, y_train_single, y_test_single = train_test_split(X_single, y, test_size=0.3, random_state=125)
+linear_model_single = LinearRegression()
+linear_model_single.fit(X_train_single, y_train_single)
+linear_predictions_single = linear_model_single.predict(X_test_single)
+
+plt.scatter(X_train_single, y_train_single, color='blue', label='Training Data')
+plt.scatter(X_test_single, y_test_single, color='green', label='Test Data')
+plt.plot(X_test_single, linear_predictions_single, color='red', label='Linear Regression')
+plt.xlabel('Total Amount Donated')
+plt.ylabel('Engagement Score')
+plt.title('Linear Regression: Total Amount Donated vs. Engagement Score')
+plt.legend()
+plt.show()
+
+
+rf_regressor = RandomForestRegressor(random_state=125)
+rf_regressor.fit(X_train, y_train)
+rf_reg_predictions = rf_regressor.predict(X_test)
+
+
+mae_rf = mean_absolute_error(y_test, rf_reg_predictions)
+mse_rf = mean_squared_error(y_test, rf_reg_predictions)
+print(f"Random Forest Regressor - Mean Squared Error: {mse_rf:.3f}, Mean Absolute Error: {mae_rf:.3f}")
+
+
+y_class = pd.cut(y, bins=3, labels=['Low', 'Medium', 'High'])
+X_train_class, X_test_class, y_train_class, y_test_class = train_test_split(X, y_class, test_size=0.3, random_state=125)
+
+rf_classifier = RandomForestClassifier(random_state=125)
+rf_classifier.fit(X_train_class, y_train_class)
+rf_class_predictions = rf_classifier.predict(X_test_class)
+
+accuracy_rf = accuracy_score(y_test_class, rf_class_predictions)
+print(f"Random Forest Classifier - Accuracy: {accuracy_rf:.3f}")
