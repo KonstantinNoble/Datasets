@@ -1,0 +1,116 @@
+import pandas as pd
+import numpy as np
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.model_selection import train_test_split, GridSearchCV
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, mean_squared_error
+
+def remove_outliers(df, factor=1.5):
+    df_cleaned = df.copy()
+    for col in df_cleaned.select_dtypes(include=['float', 'int']).columns:
+        Q1 = df_cleaned[col].quantile(0.25)
+        Q3 = df_cleaned[col].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - factor * IQR
+        upper_bound = Q3 + factor * IQR
+        df_cleaned = df_cleaned[(df_cleaned[col] >= lower_bound) & (df_cleaned[col] <= upper_bound)]
+    return df_cleaned
+
+df = pd.read_csv('/kaggle/input/lifestyle-factors-and-their-impact-on-students/student_lifestyle_dataset..csv')
+df.drop('Student_ID', axis=1, inplace=True)
+print("Missing Values:\n", df.isnull().sum())
+
+df = remove_outliers(df)
+print(f"Rows after outlier removal: {len(df)}")
+
+df.groupby("Stress_Level")["Study_Hours_Per_Day"].mean().plot(kind="bar")
+plt.ylabel("Average Study Hours")
+plt.title("Average Study Hours per Stress Level")
+plt.tight_layout()
+plt.show()
+
+X = df.drop('Stress_Level', axis=1)
+y = df['Stress_Level']
+
+df_cat = X.select_dtypes(include=['object']).columns
+for col in df_cat:
+    sns.countplot(x=col, data=df)
+    plt.title(f"Count of {col}")
+    plt.xlabel(col)
+    plt.ylabel("Count")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
+
+df_num = X.select_dtypes(include=['int', 'float']).columns
+for col in df_num:
+    sns.histplot(df[col], kde=True)
+    plt.title(f"Distribution of {col}")
+    plt.xlabel(col)
+    plt.ylabel("Count")
+    plt.tight_layout()
+    plt.show()
+
+cat_pipeline = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='most_frequent')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+])
+
+num_pipeline = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='mean')),
+    ('scaler', StandardScaler())
+])
+
+preprocessor = ColumnTransformer([
+    ('num', num_pipeline, df_num),
+    ('cat', cat_pipeline, df_cat)
+])
+
+X_transform = preprocessor.fit_transform(X)
+
+X_train, X_test, y_train, y_test = train_test_split(X_transform, y, test_size=0.3, random_state=234)
+
+param_grid = {
+    'n_estimators': [100, 200, 300],
+    'max_depth': [None, 10, 20, 30],
+    'min_samples_split': [2, 5, 10],
+    'min_samples_leaf': [1, 2, 4]
+}
+
+model = RandomForestClassifier(random_state=123)
+grid = GridSearchCV(estimator=model, param_grid=param_grid, cv=5, scoring='accuracy', n_jobs=-1)
+grid.fit(X_train, y_train)
+prediction = grid.predict(X_test)
+print("Best params:", grid.best_params_)
+print(f"Accuracy Score: {accuracy_score(y_test, prediction):.4f}")
+
+X = df[["Study_Hours_Per_Day", "Extracurricular_Hours_Per_Day", "Sleep_Hours_Per_Day",
+        "Social_Hours_Per_Day", "Physical_Activity_Hours_Per_Day"]]
+y = df["Grades"]
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=234)
+
+regression_pipeline = Pipeline([
+    ('imputer', SimpleImputer(strategy='mean')),
+    ('scaler', StandardScaler()),
+    ('model', LinearRegression())
+])
+
+regression_pipeline.fit(X_train, y_train)
+predict = regression_pipeline.predict(X_test)
+mse = mean_squared_error(y_test, predict)
+print(f"Mean Squared Error: {mse:.4f}")
+
+plt.scatter(y_test, predict, color='green', alpha=0.5)
+plt.xlabel("True Grades")
+plt.ylabel("Predicted Grades")
+plt.title("Linear Regression: Predicted vs Actual Grades")
+plt.plot([y_test.min(), y_test.max()], [y_test.min(), y_test.max()], 'r--')
+plt.tight_layout()
+plt.show()
