@@ -1,0 +1,105 @@
+import pandas as pd
+import numpy as np
+from minisom import MiniSom
+import matplotlib.pyplot as plt
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+import seaborn as sns
+from matplotlib.lines import Line2D
+
+# Load data
+data = pd.read_csv(r"top-1000-trending-youtube-videos.csv")
+
+# Encode categories and fill missing values
+le = LabelEncoder()
+data['Category_encoded'] = le.fit_transform(data['Category'].fillna('Unknown'))
+data['Category'] = data['Category'].fillna("Unknown")
+
+# Remove 'Video' column
+data.drop('Video', axis=1, inplace=True)
+
+# Clean numerical columns
+cols_to_clean = ["Video views", "Likes", "Dislikes"]
+for col in cols_to_clean:
+    data[col] = data[col].astype('str').str.replace(",", "")
+    data[col] = pd.to_numeric(data[col], errors='coerce')
+
+# Calculate video age
+data["Video_age"] = 2025 - data['published']
+
+# Log-transformation for highly skewed features
+for col in ["Video views", "Likes", "Dislikes"]:
+    data[col] = np.log1p(data[col])  # log(1+x) to handle zeros
+
+# Display category distribution
+plt.figure(figsize=(10, 6))
+sns.countplot(data=data, x="Category")
+plt.xticks(rotation=45)
+plt.title("Distribution of Categories")
+plt.show()
+
+# Check for missing values
+print("Missing Values:\n", data.isnull().sum())
+
+# Pipeline for numerical data
+pip = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='median')),
+    ('MinMax', MinMaxScaler(feature_range=(0,1)))
+])
+
+# Select features (without Category_encoded)
+df_X = data[["Video views", "Likes", "Dislikes", "Video_age"]]
+X = pip.fit_transform(df_X)
+
+# Initialize and train SOM
+som = MiniSom(x=10, y=10, input_len=X.shape[1], sigma=3.0, learning_rate=0.5)
+som.random_weights_init(X)
+som.train_random(X, num_iteration=2000)
+
+# Output quantization error
+print(f"Quantization Error: {som.quantization_error(X):.4f}")
+
+# Visualization
+plt.figure(figsize=(12, 10))
+plt.pcolor(som.distance_map().T, cmap='bone_r')  
+plt.colorbar(label='Distance')
+
+# Categories and colors
+categories = data['Category'].unique()
+colors = plt.cm.get_cmap('tab20', len(categories))
+category_to_color = {cat: colors(i) for i, cat in enumerate(categories)}
+
+# Plot data points
+for i, x in enumerate(X):
+    w = som.winner(x)
+    plt.plot(w[0] + 0.5, w[1] + 0.5, 'o', 
+             markerfacecolor=category_to_color[data['Category'].iloc[i]], 
+             markeredgecolor='k', markersize=6, alpha=0.6)
+
+# Add legend
+legend_elements = [Line2D([0], [0], marker='o', color='w', 
+                          label=cat, 
+                          markerfacecolor=category_to_color[cat], 
+                          markersize=10) for cat in categories]
+plt.legend(handles=legend_elements, title='Category', loc='upper left', bbox_to_anchor=(1.15, 1))
+plt.title('SOM with YouTube Dataset')
+plt.show()
+
+# Cluster analysis
+neuron_map = {}
+for i, x in enumerate(X):
+    w = som.winner(x)
+    w = (int(w[0]), int(w[1]))
+    if w not in neuron_map:
+        neuron_map[w] = []
+    neuron_map[w].append(i)
+
+print("\nCluster Analysis:")
+for neuron, indices in neuron_map.items():
+    cluster_data = data.iloc[indices]
+    print(f"Neuron {neuron}: {len(indices)} Videos")
+    print(f"  Average Views: {np.expm1(cluster_data['Video views']).mean():.0f}")
+    print(f"  Average Likes: {np.expm1(cluster_data['Likes']).mean():.0f}")
+    print(f"  Most Common Category: {cluster_data['Category'].mode()[0]}")
+    print(f"  Average Video Age: {cluster_data['Video_age'].mean():.1f} Years")
