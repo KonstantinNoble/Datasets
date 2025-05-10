@@ -1,0 +1,185 @@
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+from sklearn.model_selection import train_test_split
+from collections import Counter
+
+class SimpleVocab:
+    def __init__(self, texts, min_freq=2, specials=['<pad>']):
+        def tokenize(text):
+            return text.lower().split()
+        
+        counter = Counter()
+        for text in texts:
+            tokens = tokenize(text)
+            if tokens: 
+                counter.update(tokens)
+        
+        self.token2idx = {token: idx for idx, (token, count) in enumerate(counter.items()) if count >= min_freq}
+        self.idx2token = {idx: token for token, idx in self.token2idx.items()}
+        
+        for i, special in enumerate(specials):
+            self.token2idx[special] = len(self.token2idx)
+            self.idx2token[len(self.idx2token)] = special
+        
+        self.default_index = self.token2idx['<pad>']
+    
+    def __getitem__(self, token):
+        return self.token2idx.get(token, self.default_index)
+    
+    def __len__(self):
+        return len(self.token2idx)
+    
+    def get_itos(self):
+        return self.idx2token
+
+df = pd.read_csv(r"AutoLSTM\Nashville Accidents Jan 2018 - Apl 2025.csv")
+print(df.isnull().sum())
+
+text_columns = ["Collision Type Description", "Weather Description", "Illumination Description", "HarmfulDescriptions"]
+df = df.dropna(subset=text_columns)
+df = df[df[text_columns].astype(str).apply(lambda x: (x != 'nan') & (x.str.strip() != ''), axis=1).all(axis=1)]
+df['combined_text'] = df[text_columns].astype(str).agg(' '.join, axis=1)
+texts = df['combined_text'].tolist()
+
+def tokenize(text):
+    return text.lower().split()
+texts = [text for text in texts if text.strip() and tokenize(text)]
+
+vocab = SimpleVocab(texts, min_freq=2, specials=['<pad>'])
+
+def text_to_tensor(text, vocab, max_length):
+    tokens = tokenize(text)[:max_length]
+    if not tokens:
+        tokens = ['<pad>']
+    token_ids = [vocab[token] for token in tokens]
+    padded = token_ids + [vocab['<pad>']] * (max_length - len(token_ids))
+    return torch.tensor(padded, dtype=torch.long)
+
+max_sequence_length = 20
+vocab_size = len(vocab)
+embedding_dim = 150
+lstm_units = 128
+
+max_len = max(len(tokenize(text)) for text in texts)
+print(f"Maximum sequence length in dataset: {max_len}")
+X = torch.stack([text_to_tensor(text, vocab, max_sequence_length) for text in texts])
+
+X_train, X_test = train_test_split(X, test_size=0.2, random_state=123)
+
+train_dataset = TensorDataset(X_train)
+test_dataset = TensorDataset(X_test)
+batch_size = 32
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+print(f"Number of training batches: {len(train_loader)}")
+print(f"Number of test batches: {len(test_loader)}")
+
+class TextLSTMAutoEncoder(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, lstm_units, max_sequence_length):
+        super(TextLSTMAutoEncoder, self).__init__()
+        self.vocab_size = vocab_size
+        self.embedding_dim = embedding_dim
+        self.lstm_units = lstm_units
+        self.max_length = max_sequence_length
+        
+        self.embedding = nn.Embedding(vocab_size + 1, embedding_dim, padding_idx=0)
+        self.encoder_lstm = nn.LSTM(embedding_dim, lstm_units, batch_first=True)
+        self.decoder_lstm = nn.LSTM(lstm_units, lstm_units, batch_first=True)
+        self.output_layer = nn.Linear(lstm_units, vocab_size + 1)
+    
+    def forward(self, x):
+        assert x.dtype == torch.long, f"Expected dtype: torch.long, got: {x.dtype}"
+        assert x.shape[-1] == self.max_length, f"Expected sequence length: {self.max_length}, got: {x.shape[-1]}"
+        
+        embedded = self.embedding(x)
+        _, (hidden, cell) = self.encoder_lstm(embedded)
+        latent_representation = hidden
+        repeat_latent_representation = latent_representation.permute(1, 0, 2).repeat(1, self.max_length, 1)
+        initial_state = (hidden, cell)
+        decoder_outputs, _ = self.decoder_lstm(repeat_latent_representation, initial_state)
+        outputs_logits = self.output_layer(decoder_outputs)
+        return outputs_logits
+
+model = TextLSTMAutoEncoder(vocab_size, embedding_dim, lstm_units, max_sequence_length)
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = model.to(device)
+
+criterion = nn.CrossEntropyLoss(ignore_index=0)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+print("PyTorch LSTM autoencoder model for text data is defined.")
+print("Loss function and optimizer are configured.")
+print(f"Expected model input shape: (batch size, {max_sequence_length}) with integer token IDs.")
+
+def train_model(model, train_loader, test_loader, criterion, optimizer, num_epochs=10):
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss = 0.0
+        for batch in train_loader:
+            inputs = batch[0].to(device)
+            print(f"Batch shape: {inputs.shape}, dtype: {inputs.dtype}, device: {inputs.device}")
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs.view(-1, vocab_size + 1), inputs.view(-1))
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * inputs.size(0)
+        
+        train_loss /= len(train_loader.dataset)
+        
+        model.eval()
+        test_loss = 0.0
+        with torch.no_grad():
+            for batch in test_loader:
+                inputs = batch[0].to(device)
+                outputs = model(inputs)
+                loss = criterion(outputs.view(-1, vocab_size + 1), inputs.view(-1))
+                test_loss += loss.item() * inputs.size(0)
+        
+        test_loss /= len(test_loader.dataset)
+        
+        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss:.4f}, Test Loss: {test_loss:.4f}")
+
+try:
+    train_model(model, train_loader, test_loader, criterion, optimizer)
+except Exception as e:
+    print(f"Error during training: {e}")
+
+def evaluate_model(model, data_loader, vocab, device):
+    model.eval()
+    total_loss = 0.0
+    criterion = nn.CrossEntropyLoss(ignore_index=0)
+    
+    with torch.no_grad():
+        for batch in data_loader:
+            inputs = batch[0].to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs.view(-1, vocab_size + 1), inputs.view(-1))
+            total_loss += loss.item() * inputs.size(0)
+    
+    total_loss /= len(data_loader.dataset)
+    
+    sample_input = next(iter(data_loader))[0][0].to(device)
+    sample_output = model(sample_input.unsqueeze(0))
+    _, predicted_ids = torch.max(sample_output, dim=-1)
+    
+    input_text = [vocab.get_itos()[id] for id in sample_input.cpu().numpy() if id != 0]
+    predicted_text = [vocab.get_itos()[id] for id in predicted_ids[0].cpu().numpy() if id != 0]
+    
+    print(f"Example input: {' '.join(input_text)}")
+    print(f"Example prediction: {' '.join(predicted_text)}")
+    
+    return total_loss
+
+try:
+    valid_loss = evaluate_model(model, test_loader, vocab, device)
+    print(f"Test loss: {valid_loss:.4f}")
+except Exception as e:
+    print(f"Error during evaluation: {e}")
+
+print("Training and evaluation completed.")
